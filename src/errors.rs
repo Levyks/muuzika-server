@@ -1,10 +1,10 @@
+use crate::dtos::ErrorResponse;
+use crate::rooms::RoomCode;
 use serde::Serialize;
 use thiserror::Error;
 use warp::http::StatusCode;
 use warp::reject::Reject;
 use warp::Rejection;
-
-use crate::serialization::{serialize_status_code, serialize_utc_date_time};
 
 #[derive(Error, Debug, Serialize)]
 #[serde(tag = "error", content = "data")]
@@ -12,22 +12,35 @@ pub enum MuuzikaError {
     #[error("Unknown error")]
     Unknown,
 
-    #[error("Room not found")]
-    RoomNotFound,
+    #[error("Room {room_code} not found")]
+    #[serde(rename_all = "camelCase")]
+    RoomNotFound { room_code: RoomCode },
 
     #[error("Out of room codes")]
     OutOfRoomCodes,
 
-    #[error("Username taken")]
-    UsernameTaken,
+    #[error("Username {username} is already taken in room {room_code}")]
+    #[serde(rename_all = "camelCase")]
+    UsernameTaken {
+        room_code: RoomCode,
+        username: String,
+    },
+
+    #[error("Player {username} is not in room {room_code}")]
+    #[serde(rename_all = "camelCase")]
+    PlayerNotInRoom {
+        room_code: RoomCode,
+        username: String,
+    },
 }
 
 impl MuuzikaError {
     pub fn code(&self) -> StatusCode {
         match self {
-            MuuzikaError::RoomNotFound => StatusCode::NOT_FOUND,
+            MuuzikaError::RoomNotFound { .. } => StatusCode::NOT_FOUND,
             MuuzikaError::OutOfRoomCodes => StatusCode::SERVICE_UNAVAILABLE,
-            MuuzikaError::UsernameTaken => StatusCode::CONFLICT,
+            MuuzikaError::UsernameTaken { .. } => StatusCode::CONFLICT,
+            MuuzikaError::PlayerNotInRoom { .. } => StatusCode::FORBIDDEN,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -36,34 +49,6 @@ impl MuuzikaError {
 impl Reject for MuuzikaError {}
 
 pub type MuuzikaResult<T> = Result<T, MuuzikaError>;
-
-#[derive(Serialize)]
-pub struct ErrorResponse {
-    #[serde(serialize_with = "serialize_status_code")]
-    pub code: StatusCode,
-    #[serde(serialize_with = "serialize_utc_date_time")]
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub error: String,
-    pub message: String,
-    pub data: Option<serde_json::Value>,
-}
-
-impl ErrorResponse {
-    fn new(code: StatusCode, error: String, message: String, data: Option<serde_json::Value>) -> Self {
-        ErrorResponse {
-            code,
-            timestamp: chrono::Utc::now(),
-            error,
-            message,
-            data,
-        }
-    }
-
-    fn no_data(code: StatusCode, error: String, message: String) -> Self {
-        ErrorResponse::new(code, error, message, None)
-    }
-}
-
 
 impl From<&MuuzikaError> for ErrorResponse {
     fn from(muuzika_error: &MuuzikaError) -> Self {
@@ -75,23 +60,22 @@ impl From<&MuuzikaError> for ErrorResponse {
                 .get("error")
                 .map(|v| v.as_str())
                 .flatten()
-                .unwrap_or("Unknown")
+                .unwrap_or_else(|| "Unknown")
                 .to_string();
 
-            data = json_value
-                .get("data")
-                .map(|v| v.clone());
+            data = json_value.get("data").map(|v| v.clone());
         } else {
             error = "Unknown".to_string();
             data = None;
         }
 
-        ErrorResponse::new(
-            muuzika_error.code(),
-            error,
-            muuzika_error.to_string(),
-            data,
-        )
+        ErrorResponse::new(muuzika_error.code(), error, muuzika_error.to_string(), data)
+    }
+}
+
+impl From<MuuzikaError> for ErrorResponse {
+    fn from(muuzika_error: MuuzikaError) -> Self {
+        ErrorResponse::from(&muuzika_error)
     }
 }
 
@@ -141,7 +125,9 @@ pub fn get_response_from_rejection(err: Rejection) -> ErrorResponse {
             "BodyDeserializeError".to_string(),
             body_deserialize_error.to_string(),
         )
-    } else if let Some(missing_connection_upgrade) = err.find::<warp::ws::MissingConnectionUpgrade>() {
+    } else if let Some(missing_connection_upgrade) =
+        err.find::<warp::ws::MissingConnectionUpgrade>()
+    {
         ErrorResponse::no_data(
             StatusCode::BAD_REQUEST,
             "MissingConnectionUpgrade".to_string(),

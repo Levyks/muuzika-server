@@ -1,11 +1,10 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use rand::seq::SliceRandom;
-use rand::thread_rng;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::RwLock;
 use warp::ws::Message;
+
+use crate::errors::{MuuzikaError, MuuzikaResult};
+use crate::state::State;
 
 pub type RoomCode = u32;
 pub type Username = String;
@@ -28,35 +27,50 @@ impl Player {
 }
 
 pub struct Room {
+    pub state: State,
     pub code: RoomCode,
     pub players: HashMap<Username, Player>,
+    pub leader: Username,
 }
 
 impl Room {
-    pub fn new(code: RoomCode) -> Self {
+    pub fn new(state: State, code: RoomCode, leader_username: Username) -> Self {
+        let leader = Player::new(leader_username.clone());
+        let mut players = HashMap::new();
+        players.insert(leader_username.clone(), leader);
         Self {
+            state,
             code,
-            players: HashMap::new(),
+            players,
+            leader: leader_username,
         }
-    }
-
-    pub fn connect_player(&mut self, username: &Username, tx: UnboundedSender<Message>) -> Result<(), ()> {
-        let player = self.players.get_mut(username).ok_or(())?;
-        player.tx = Some(tx);
-        Ok(())
-    }
-
-    pub fn disconnect_player(&mut self, username: &Username) -> Result<(), ()> {
-        let player = self.players.get_mut(username).ok_or(())?;
-        player.tx = None;
-        Ok(())
     }
 }
 
-pub type WrappedRoom = Arc<RwLock<Room>>;
+pub fn connect_player(
+    room: &mut Room,
+    username: &Username,
+    tx: UnboundedSender<Message>,
+) -> MuuzikaResult<()> {
+    let player = room
+        .players
+        .get_mut(username)
+        .ok_or_else(|| MuuzikaError::PlayerNotInRoom {
+            room_code: room.code,
+            username: username.clone(),
+        })?;
+    player.tx = Some(tx);
+    Ok(())
+}
 
-pub fn generate_available_codes(max: u32) -> Vec<RoomCode> {
-    let mut codes: Vec<u32> = (0..max).collect();
-    codes.shuffle(&mut thread_rng());
-    codes
+pub fn disconnect_player(room: &mut Room, username: &Username) -> MuuzikaResult<()> {
+    let player = room
+        .players
+        .get_mut(username)
+        .ok_or_else(|| MuuzikaError::PlayerNotInRoom {
+            room_code: room.code,
+            username: username.clone(),
+        })?;
+    player.tx = None;
+    Ok(())
 }
