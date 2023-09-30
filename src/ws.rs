@@ -30,7 +30,7 @@ fn split_and_spawn_flusher(ws: WebSocket) -> (UnboundedSender<Message>, SplitStr
 
 pub async fn handle_ws(ws: warp::ws::Ws, state: State, room_code: RoomCode, username: Username) -> Result<impl Reply + Sized, Rejection> {
     println!("request for room {} by {}", room_code, username);
-    if let Some(room_entry) = state.rooms.get(&room_code) {
+    if let Some(room_entry) = state.rooms.read().await.get(&room_code) {
         let room = room_entry.clone();
         Ok(ws.on_upgrade(move |socket| handle_ws_upgrade(socket, username, room)))
     } else {

@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 chrono = "0.4.31"
-dashmap = "5.5.3"
 futures-util = "0.3.28"
 rand = "0.8.5"
 serde = { version = "1.0.188", features = ["derive"] }

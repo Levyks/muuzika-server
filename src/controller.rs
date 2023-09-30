@@ -32,7 +32,7 @@ pub async fn create_room(
 
     let wrapped_room = Arc::new(RwLock::new(room));
 
-    state.rooms.insert(room_code.clone(), wrapped_room);
+    state.rooms.write().await.insert(room_code.clone(), wrapped_room);
 
     Ok(reply(RoomJoinedResponse {
         username: request.username,
@@ -46,7 +46,7 @@ pub async fn join_room(
 ) -> Result<impl Reply, Rejection> {
     println!("Player {} joining room {}", request.username, room_code);
 
-    let wrapped_room = state.rooms.get(&room_code).ok_or(MuuzikaError::RoomNotFound)?.clone();
+    let wrapped_room = state.rooms.read().await.get(&room_code).ok_or(MuuzikaError::RoomNotFound)?.clone();
     let mut room = wrapped_room.write().await;
 
     if room.players.contains_key(&request.username) {

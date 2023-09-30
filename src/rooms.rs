@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use dashmap::DashMap;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use tokio::sync::mpsc::UnboundedSender;
@@ -55,7 +54,6 @@ impl Room {
 }
 
 pub type WrappedRoom = Arc<RwLock<Room>>;
-pub type WrappedRoomsMap = Arc<DashMap<RoomCode, WrappedRoom>>;
 
 pub fn generate_available_codes(max: u32) -> Vec<RoomCode> {
     let mut codes: Vec<u32> = (0..max).collect();
