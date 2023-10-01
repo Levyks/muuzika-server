@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use warp::http::StatusCode;
 use warp::{Rejection, Reply};
 
-use crate::dtos::{CreateOrJoinRoomRequest, RoomJoinedResponse};
 use crate::errors::MuuzikaError;
+use crate::messages::ServerMessage;
 use crate::rooms::{Player, Room, RoomCode};
 use crate::state::State;
 
@@ -14,6 +15,20 @@ where
     T: serde::Serialize,
 {
     Ok(warp::reply::with_status(warp::reply::json(&data), status))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateOrJoinRoomRequest {
+    pub username: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomJoinedResponse {
+    pub room_code: RoomCode,
+    pub username: String,
+    pub token: String,
 }
 
 pub async fn create_room(
@@ -57,8 +72,6 @@ pub async fn join_room(
     request: CreateOrJoinRoomRequest,
     state: State,
 ) -> Result<impl Reply, Rejection> {
-    println!("Player {} joining room {}", request.username, room_code);
-
     let wrapped_room = state
         .rooms
         .read()
@@ -81,6 +94,8 @@ pub async fn join_room(
     let player = Player::new(request.username.clone());
 
     room.players.insert(request.username.clone(), player);
+
+    room.send(ServerMessage::PlayerJoined(request.username.clone()))?;
 
     reply(
         RoomJoinedResponse {

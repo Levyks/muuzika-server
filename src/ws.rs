@@ -1,15 +1,15 @@
-use crate::dtos::ServerToClientMessage;
-use crate::errors::MuuzikaError;
-use crate::rooms;
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
+use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use warp::ws::{Message, WebSocket};
 use warp::{Rejection, Reply};
 
-use crate::rooms::{RoomCode, Username};
+use crate::errors::MuuzikaError;
+use crate::messages::{handle_client_message, ClientMessage, ServerMessage};
+use crate::rooms::{Room, RoomCode, Username};
 use crate::state::{State, WrappedRoom};
 
 fn split_and_spawn_flusher(ws: WebSocket) -> (UnboundedSender<Message>, SplitStream<WebSocket>) {
@@ -48,9 +48,9 @@ pub async fn handle_ws_upgrade(
     let room = if let Some(r) = state.rooms.read().await.get(&room_code) {
         r.clone()
     } else {
-        send_and_close(
-            tx,
-            ServerToClientMessage::Error(
+        serialize_and_send_and_close(
+            &tx,
+            ServerMessage::Error(
                 MuuzikaError::RoomNotFound {
                     room_code: room_code.clone(),
                 }
@@ -62,14 +62,13 @@ pub async fn handle_ws_upgrade(
 
     let room_code = {
         let mut room = room.write().await;
-        if let Err(err) = rooms::connect_player(&mut room, &username, tx.clone()) {
-            send_and_close(tx, ServerToClientMessage::Error(err.into()));
+        if let Err(err) = room.connect_player(&username, tx.clone()) {
+            serialize_and_send_and_close(&tx, ServerMessage::Error(err.into()));
             return;
         };
+        serialize_and_send(&tx, ServerMessage::RoomSync((&room as &Room).into()), None);
         room.code.clone()
     };
-
-    send(tx, ServerToClientMessage::Ready);
 
     println!("[Room {}] User {} connected", room_code, username);
 
@@ -84,49 +83,101 @@ pub async fn handle_ws_upgrade(
                 break;
             }
         };
-        handle_message(message, &username, room.clone()).await;
+        handle_message(&tx, message, &username, room.clone()).await;
     }
 
-    let mut room = room.write().await;
-    let _ = rooms::disconnect_player(&mut room, &username);
+    let _ = room.write().await.disconnect_player(&username);
     println!("[Room {}] User {} disconnected", room_code, username);
 }
 
-async fn handle_message(message: Message, username: &Username, room: WrappedRoom) {
-    // Skip any non-Text messages...
-    let message = if let Ok(s) = message.to_str() {
-        s
+async fn handle_message(
+    tx: &UnboundedSender<Message>,
+    message: Message,
+    username: &Username,
+    room: WrappedRoom,
+) {
+    let message = if let Ok(m) = message.to_str() {
+        m
     } else {
         return;
     };
 
-    let new_msg = format!("[{}]: {}", username, message);
+    let value = match serde_json::from_str::<Value>(message) {
+        Ok(v) => v,
+        Err(e) => {
+            serialize_and_send(tx, ServerMessage::Error(MuuzikaError::from(e).into()), None);
+            return;
+        }
+    };
 
-    room.read()
-        .await
-        .players
-        .values()
-        .filter_map(|p| p.tx.as_ref())
-        .for_each(|tx| {
-            let _ = tx.send(Message::text(new_msg.clone()));
-        });
+    let ack = value
+        .get("ack")
+        .map(Value::as_str)
+        .flatten()
+        .map(String::from);
+
+    let client_message = match serde_json::from_value::<ClientMessage>(value) {
+        Ok(m) => m,
+        Err(e) => {
+            serialize_and_send(tx, ServerMessage::Error(MuuzikaError::from(e).into()), ack);
+            return;
+        }
+    };
+
+    let result = handle_client_message(client_message, username, room).await;
+
+    serialize_and_send(tx, result, ack);
 }
 
-fn send(tx: UnboundedSender<Message>, message: ServerToClientMessage) {
-    tx.send(message.into()).unwrap_or_else(|_| {
-        let _ = tx.send(Message::close());
-    })
-}
-
-fn send_and_close(tx: UnboundedSender<Message>, message: ServerToClientMessage) {
-    let _ = tx.send(message.into());
+fn close(tx: &UnboundedSender<Message>) {
     let _ = tx.send(Message::close());
 }
 
-impl From<ServerToClientMessage> for Message {
-    fn from(message: ServerToClientMessage) -> Self {
-        serde_json::to_string(&message)
-            .map(Message::text)
-            .unwrap_or_else(|_| Message::close())
+pub fn make_message<T>(message: T, ack: Option<String>) -> serde_json::Result<Message>
+where
+    T: serde::Serialize,
+{
+    let value = serde_json::to_value(message)?;
+
+    let text = match value {
+        serde_json::Value::Object(mut map) => {
+            if let Some(ack) = ack {
+                map.insert("ack".to_string(), serde_json::Value::String(ack));
+            }
+            serde_json::to_string(&map)?
+        }
+        _ => serde_json::to_string(&value)?,
+    };
+
+    Ok(Message::text(text))
+}
+
+pub fn send_or_close(tx: &UnboundedSender<Message>, message: Message) -> bool {
+    if let Ok(_) = tx.send(message) {
+        true
+    } else {
+        close(tx);
+        false
+    }
+}
+
+pub fn serialize_and_send<T>(tx: &UnboundedSender<Message>, message: T, ack: Option<String>) -> bool
+where
+    T: serde::Serialize,
+{
+    if let Ok(message) = make_message(message, ack) {
+        send_or_close(tx, message)
+    } else {
+        close(tx);
+        false
+    }
+}
+
+fn serialize_and_send_and_close<T>(tx: &UnboundedSender<Message>, message: T)
+where
+    T: serde::Serialize,
+{
+    if serialize_and_send(tx, message, None) {
+        let _ = tx.send(Message::close());
     }
 }

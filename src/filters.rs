@@ -4,7 +4,6 @@ use serde::de::DeserializeOwned;
 use warp::{Filter, Rejection, Reply};
 
 use crate::controller;
-use crate::dtos::CreateOrJoinRoomRequest;
 use crate::errors::get_response_from_rejection;
 use crate::rooms::{RoomCode, Username};
 use crate::state::State;
@@ -22,7 +21,7 @@ fn ws(state: State) -> impl Filter<Extract = impl Reply, Error = Rejection> + Cl
 fn create_room(state: State) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::path!("rooms")
         .and(warp::post())
-        .and(json_body::<CreateOrJoinRoomRequest>())
+        .and(json_body::<controller::CreateOrJoinRoomRequest>())
         .and(with_state(state))
         .and_then(controller::create_room)
 }
@@ -30,7 +29,7 @@ fn create_room(state: State) -> impl Filter<Extract = impl Reply, Error = Reject
 fn join_room(state: State) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::path!("rooms" / RoomCode)
         .and(warp::post())
-        .and(json_body::<CreateOrJoinRoomRequest>())
+        .and(json_body::<controller::CreateOrJoinRoomRequest>())
         .and(with_state(state))
         .and_then(controller::join_room)
 }
@@ -47,7 +46,7 @@ fn with_state(state: State) -> impl Filter<Extract = (State,), Error = Infallibl
     warp::any().map(move || state.clone())
 }
 
-fn json_body<T>() -> impl Filter<Extract = (T,), Error = warp::Rejection> + Clone
+fn json_body<T>() -> impl Filter<Extract = (T,), Error = Rejection> + Clone
 where
     T: DeserializeOwned + Send,
 {

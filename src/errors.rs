@@ -1,16 +1,24 @@
-use crate::dtos::ErrorResponse;
-use crate::rooms::RoomCode;
 use serde::Serialize;
 use thiserror::Error;
 use warp::http::StatusCode;
 use warp::reject::Reject;
 use warp::Rejection;
 
+use crate::rooms::RoomCode;
+use crate::serialization::{serialize_status_code, serialize_utc_date_time};
+
 #[derive(Error, Debug, Serialize)]
 #[serde(tag = "error", content = "data")]
 pub enum MuuzikaError {
     #[error("Unknown error")]
     Unknown,
+
+    #[error("Serialization error: {0}")]
+    SerializationError(
+        #[from]
+        #[serde(skip)]
+        serde_json::Error,
+    ),
 
     #[error("Room {room_code} not found")]
     #[serde(rename_all = "camelCase")]
@@ -49,6 +57,39 @@ impl MuuzikaError {
 impl Reject for MuuzikaError {}
 
 pub type MuuzikaResult<T> = Result<T, MuuzikaError>;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorResponse {
+    #[serde(serialize_with = "serialize_status_code")]
+    pub code: StatusCode,
+    #[serde(serialize_with = "serialize_utc_date_time")]
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub error: String,
+    pub message: String,
+    pub data: Option<serde_json::Value>,
+}
+
+impl ErrorResponse {
+    pub fn new(
+        code: StatusCode,
+        error: String,
+        message: String,
+        data: Option<serde_json::Value>,
+    ) -> Self {
+        ErrorResponse {
+            code,
+            timestamp: chrono::Utc::now(),
+            error,
+            message,
+            data,
+        }
+    }
+
+    pub fn no_data(code: StatusCode, error: String, message: String) -> Self {
+        ErrorResponse::new(code, error, message, None)
+    }
+}
 
 impl From<&MuuzikaError> for ErrorResponse {
     fn from(muuzika_error: &MuuzikaError) -> Self {

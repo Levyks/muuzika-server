@@ -4,9 +4,9 @@ use crate::filters::{filters, handle_rejection};
 use crate::state::State;
 
 mod controller;
-mod dtos;
 mod errors;
 mod filters;
+mod messages;
 mod rooms;
 mod serialization;
 mod state;
