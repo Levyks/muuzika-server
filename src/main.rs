@@ -8,8 +8,6 @@ use crate::state::State;
 mod controller;
 mod errors;
 mod filters;
-#[macro_use]
-mod macros;
 mod messages;
 mod rooms;
 mod serialization;
