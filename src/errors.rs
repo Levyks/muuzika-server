@@ -4,7 +4,7 @@ use warp::http::StatusCode;
 use warp::reject::Reject;
 use warp::Rejection;
 
-use crate::rooms::RoomCode;
+use crate::rooms::{RoomCode, Username};
 use crate::serialization::{serialize_status_code, serialize_utc_date_time};
 
 #[derive(Error, Debug, Serialize)]
@@ -20,6 +20,13 @@ pub enum MuuzikaError {
         serde_json::Error,
     ),
 
+    #[error("JWT error: {0}")]
+    JwtError(
+        #[from]
+        #[serde(skip)]
+        jsonwebtoken::errors::Error,
+    ),
+
     #[error("Room {room_code} not found")]
     #[serde(rename_all = "camelCase")]
     RoomNotFound { room_code: RoomCode },
@@ -31,15 +38,24 @@ pub enum MuuzikaError {
     #[serde(rename_all = "camelCase")]
     UsernameTaken {
         room_code: RoomCode,
-        username: String,
+        username: Username,
     },
 
     #[error("Player {username} is not in room {room_code}")]
     #[serde(rename_all = "camelCase")]
     PlayerNotInRoom {
         room_code: RoomCode,
-        username: String,
+        username: Username,
     },
+
+    #[error("Invalid authorization header")]
+    InvalidAuthorizationHeader { expected_prefix: String },
+
+    #[error("Expired token")]
+    ExpiredToken,
+
+    #[error("Connection was established in another device")]
+    ConnectedInAnotherDevice,
 }
 
 impl MuuzikaError {
@@ -47,8 +63,12 @@ impl MuuzikaError {
         match self {
             MuuzikaError::RoomNotFound { .. } => StatusCode::NOT_FOUND,
             MuuzikaError::OutOfRoomCodes => StatusCode::SERVICE_UNAVAILABLE,
-            MuuzikaError::UsernameTaken { .. } => StatusCode::CONFLICT,
+            MuuzikaError::UsernameTaken { .. } | MuuzikaError::ConnectedInAnotherDevice { .. } => {
+                StatusCode::CONFLICT
+            }
             MuuzikaError::PlayerNotInRoom { .. } => StatusCode::FORBIDDEN,
+            MuuzikaError::JwtError(_) | MuuzikaError::ExpiredToken => StatusCode::UNAUTHORIZED,
+            MuuzikaError::InvalidAuthorizationHeader { .. } => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

@@ -1,17 +1,17 @@
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{ErrorResponse, MuuzikaResult};
-use crate::rooms::{RoomDto, Username};
+use crate::rooms::{RoomSyncDto, Username};
 use crate::state::WrappedRoom;
 
 #[derive(Serialize, Debug)]
 #[serde(tag = "type", content = "data")]
 pub enum ServerMessage {
-    RoomSync(RoomDto),
-    PlayerJoined(String),
-    PlayerLeft(String),
-    PlayerConnected(String),
-    PlayerDisconnected(String),
+    Sync(RoomSyncDto),
+    PlayerJoined(Username),
+    PlayerLeft(Username),
+    PlayerConnected(Username),
+    PlayerDisconnected(Username),
     Error(ErrorResponse),
     Result(u32),
 }
@@ -25,7 +25,7 @@ pub enum ClientMessage {
 pub async fn handle_client_message(
     message: ClientMessage,
     username: &Username,
-    room: WrappedRoom,
+    room: &WrappedRoom,
 ) -> ServerMessage {
     let result: MuuzikaResult<ServerMessage> = match message {
         ClientMessage::Add(numbers) => handle_add(numbers).await,

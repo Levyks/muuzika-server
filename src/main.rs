@@ -1,3 +1,5 @@
+extern crate derive_more;
+
 use std::env;
 
 use warp::Filter;
@@ -8,6 +10,8 @@ use crate::state::State;
 mod controller;
 mod errors;
 mod filters;
+mod helpers;
+mod auth;
 mod messages;
 mod rooms;
 mod serialization;
@@ -19,7 +23,7 @@ async fn main() {
     if env::var_os("RUST_LOG").is_none() {
         env::set_var("RUST_LOG", "info");
     }
-    pretty_env_logger::init();
+    pretty_env_logger::init_timed();
 
     let state = State::new();
     let server = filters(state)

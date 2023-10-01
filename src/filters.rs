@@ -5,16 +5,15 @@ use warp::{Filter, Rejection, Reply};
 
 use crate::controller;
 use crate::errors::get_response_from_rejection;
-use crate::rooms::{RoomCode, Username};
+use crate::rooms::RoomCode;
 use crate::state::State;
 use crate::ws::handle_ws;
 
-fn ws(state: State) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path!("ws")
+fn ws_room(state: State) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("rooms" / RoomCode / "ws")
         .and(warp::ws())
+        .and(warp::header::<String>("Authorization"))
         .and(with_state(state))
-        .and(warp::header::<RoomCode>("room-code"))
-        .and(warp::header::<Username>("username"))
         .and_then(handle_ws)
 }
 
@@ -34,12 +33,10 @@ fn join_room(state: State) -> impl Filter<Extract = impl Reply, Error = Rejectio
         .and_then(controller::join_room)
 }
 
-pub fn rooms(state: State) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    create_room(state.clone()).or(join_room(state))
-}
-
 pub fn filters(state: State) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    rooms(state.clone()).or(ws(state))
+    ws_room(state.clone())
+        .or(create_room(state.clone()))
+        .or(join_room(state.clone()))
 }
 
 fn with_state(state: State) -> impl Filter<Extract = (State,), Error = Infallible> + Clone {
