@@ -58,7 +58,7 @@ impl Reject for MuuzikaError {}
 
 pub type MuuzikaResult<T> = Result<T, MuuzikaError>;
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorResponse {
     #[serde(serialize_with = "serialize_status_code")]

@@ -18,6 +18,7 @@ pub struct Room {
 }
 
 impl Room {
+    const LOG_TARGET: &'static str = "muuzika::room";
     pub fn new(state: State, code: RoomCode, leader_username: Username) -> Self {
         let leader = Player::new(leader_username.clone());
         let mut players = HashMap::new();
@@ -47,6 +48,7 @@ impl Room {
         let player = self.get_player_mut(username)?;
         player.tx = Some(tx);
 
+        log::debug!(target: Room::LOG_TARGET, "[{}] Player \"{}\" connected", self.code, username);
         self.send_except(ServerMessage::PlayerConnected(username.clone()), &username)?;
 
         Ok(())
@@ -56,6 +58,7 @@ impl Room {
         let player = self.get_player_mut(username)?;
         player.tx = None;
 
+        log::debug!(target: Room::LOG_TARGET, "[{}] Player \"{}\" disconnected", self.code, username);
         self.send(ServerMessage::PlayerDisconnected(username.clone()))?;
 
         Ok(())
@@ -100,7 +103,7 @@ impl Room {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RoomDto {
     pub code: RoomCode,
@@ -141,7 +144,7 @@ impl Player {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerDto {
     pub username: Username,

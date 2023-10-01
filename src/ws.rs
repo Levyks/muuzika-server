@@ -1,5 +1,6 @@
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
+use rand::random;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
@@ -12,6 +13,8 @@ use crate::messages::{handle_client_message, ClientMessage, ServerMessage};
 use crate::rooms::{Room, RoomCode, Username};
 use crate::state::{State, WrappedRoom};
 
+const WS_LOG_TARGET: &'static str = "muuzika::ws";
+
 fn split_and_spawn_flusher(ws: WebSocket) -> (UnboundedSender<Message>, SplitStream<WebSocket>) {
     let (mut user_ws_tx, user_ws_rx) = ws.split();
     let (tx, rx) = mpsc::unbounded_channel::<Message>();
@@ -20,7 +23,7 @@ fn split_and_spawn_flusher(ws: WebSocket) -> (UnboundedSender<Message>, SplitStr
     tokio::task::spawn(async move {
         while let Some(message) = rx.next().await {
             user_ws_tx.send(message).await.unwrap_or_else(|e| {
-                eprintln!("websocket send error: {}", e);
+                log::debug!(target: WS_LOG_TARGET, "WebSocket send error: {:?}", e);
             })
         }
     });
@@ -43,11 +46,17 @@ pub async fn handle_ws_upgrade(
     room_code: RoomCode,
     username: Username,
 ) {
+    let identifier = format!("{:05}", random::<u16>());
+    const LOG_TARGET: &'static str = "muuzika::handle_ws_upgrade";
+
+    log::debug!(target: LOG_TARGET, "[{}] Upgrading WebSocket connection for player \"{}\" in room {}", identifier, username, room_code);
+
     let (tx, mut rx) = split_and_spawn_flusher(ws);
 
     let room = if let Some(r) = state.rooms.read().await.get(&room_code) {
         r.clone()
     } else {
+        log::debug!(target: LOG_TARGET, "[{}] Room not found", identifier);
         serialize_and_send_and_close(
             &tx,
             ServerMessage::Error(
@@ -63,6 +72,7 @@ pub async fn handle_ws_upgrade(
     let room_code = {
         let mut room = room.write().await;
         if let Err(err) = room.connect_player(&username, tx.clone()) {
+            log::debug!(target: LOG_TARGET, "[{}] Error connecting player: {:?}", identifier, err);
             serialize_and_send_and_close(&tx, ServerMessage::Error(err.into()));
             return;
         };
@@ -70,16 +80,11 @@ pub async fn handle_ws_upgrade(
         room.code.clone()
     };
 
-    println!("[Room {}] User {} connected", room_code, username);
-
     while let Some(result) = rx.next().await {
         let message = match result {
             Ok(m) => m,
             Err(e) => {
-                eprintln!(
-                    "websocket error(room={}, player={}): {}",
-                    room_code, username, e
-                );
+                log::debug!(target: WS_LOG_TARGET, "WebSocket message error for player \"{}\" in room {}: {:?}", username, room_code, e);
                 break;
             }
         };
@@ -87,7 +92,6 @@ pub async fn handle_ws_upgrade(
     }
 
     let _ = room.write().await.disconnect_player(&username);
-    println!("[Room {}] User {} disconnected", room_code, username);
 }
 
 async fn handle_message(
@@ -102,9 +106,15 @@ async fn handle_message(
         return;
     };
 
+    let identifier = format!("{:05}", random::<u16>());
+    const LOG_TARGET: &'static str = "muuzika::handle_message";
+
+    log::trace!(target: LOG_TARGET, "[{}] Received message from player \"{}\" in room {}: {}", identifier, username, room.read().await.code, message);
+
     let value = match serde_json::from_str::<Value>(message) {
         Ok(v) => v,
         Err(e) => {
+            log::debug!(target: LOG_TARGET, "[{}] Error parsing message: {:?}", identifier, e);
             serialize_and_send(tx, ServerMessage::Error(MuuzikaError::from(e).into()), None);
             return;
         }
@@ -119,12 +129,15 @@ async fn handle_message(
     let client_message = match serde_json::from_value::<ClientMessage>(value) {
         Ok(m) => m,
         Err(e) => {
+            log::debug!(target: LOG_TARGET, "[{}] Error parsing message: {:?}", identifier, e);
             serialize_and_send(tx, ServerMessage::Error(MuuzikaError::from(e).into()), ack);
             return;
         }
     };
 
+    log::trace!(target: LOG_TARGET, "[{}] Handling message: {:?}", identifier, client_message);
     let result = handle_client_message(client_message, username, room).await;
+    log::trace!(target: LOG_TARGET, "[{}] Answering with: {:?}, ack={:?}", identifier, result, ack);
 
     serialize_and_send(tx, result, ack);
 }

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use rand::random;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use warp::http::StatusCode;
@@ -35,27 +36,31 @@ pub async fn create_room(
     request: CreateOrJoinRoomRequest,
     state: State,
 ) -> Result<impl Reply, Rejection> {
-    let room_code = state
-        .available_codes
-        .write()
-        .await
-        .pop()
-        .ok_or(MuuzikaError::OutOfRoomCodes)?;
+    let identifier = format!("{:05}", random::<u16>());
+    const LOG_TARGET: &'static str = "muuzika::create_room";
 
-    println!(
-        "Creating room with code {} for player {}",
-        room_code, request.username
-    );
+    log::debug!(target: LOG_TARGET, "[{}] Creating room for player \"{}\"", identifier, request.username);
+
+    let room_code = {
+        let mut available_codes = state.available_codes.write().await;
+        if let Some(room_code) = available_codes.pop() {
+            log::debug!(target: LOG_TARGET, "[{}] Got room code {}, {} remaining", identifier, room_code, available_codes.len());
+            room_code
+        } else {
+            log::error!(target: LOG_TARGET, "[{}] Out of room codes", identifier);
+            Err(MuuzikaError::OutOfRoomCodes)?
+        }
+    };
 
     let room = Room::new(state.clone(), room_code.clone(), request.username.clone());
 
     let wrapped_room = Arc::new(RwLock::new(room));
 
-    state
-        .rooms
-        .write()
-        .await
-        .insert(room_code.clone(), wrapped_room);
+    {
+        let mut rooms = state.rooms.write().await;
+        rooms.insert(room_code.clone(), wrapped_room);
+        log::debug!(target: LOG_TARGET, "[{}] Room {} created, {} rooms total", identifier, room_code, rooms.len());
+    }
 
     reply(
         RoomJoinedResponse {
@@ -72,6 +77,11 @@ pub async fn join_room(
     request: CreateOrJoinRoomRequest,
     state: State,
 ) -> Result<impl Reply, Rejection> {
+    let identifier = format!("{:05}", random::<u16>());
+    const LOG_TARGET: &'static str = "muuzika::join_room";
+
+    log::debug!(target: LOG_TARGET, "[{}] Joining room {} for player \"{}\"", identifier, room_code, request.username);
+
     let wrapped_room = state
         .rooms
         .read()
@@ -85,6 +95,7 @@ pub async fn join_room(
     let mut room = wrapped_room.write().await;
 
     if room.players.contains_key(&request.username) {
+        log::debug!(target: LOG_TARGET, "[{}] Username is already taken", identifier);
         Err(MuuzikaError::UsernameTaken {
             room_code: room_code.clone(),
             username: request.username.clone(),
@@ -95,6 +106,7 @@ pub async fn join_room(
 
     room.players.insert(request.username.clone(), player);
 
+    log::debug!(target: LOG_TARGET, "[{}] Player \"{}\" joined room {}", identifier, request.username, room_code);
     room.send(ServerMessage::PlayerJoined(request.username.clone()))?;
 
     reply(

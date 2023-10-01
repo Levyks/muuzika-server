@@ -4,7 +4,7 @@ use crate::errors::{ErrorResponse, MuuzikaResult};
 use crate::rooms::{RoomDto, Username};
 use crate::state::WrappedRoom;
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 #[serde(tag = "type", content = "data")]
 pub enum ServerMessage {
     RoomSync(RoomDto),
@@ -16,7 +16,7 @@ pub enum ServerMessage {
     Result(u32),
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(tag = "type", content = "data")]
 pub enum ClientMessage {
     Add(Vec<u32>),
