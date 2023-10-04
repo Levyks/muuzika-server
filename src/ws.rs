@@ -78,7 +78,7 @@ pub async fn handle_ws_upgrade(ws: WebSocket, state: State, token: String) {
         }
     }
 
-    let _ = lobby::disconnect_player(room, &username, &conn).await;
+    let _ = lobby::disconnect_player(&state, &room, &username, &conn).await;
 }
 
 fn parse_message(message: &str) -> (serde_json::Result<ClientMessage>, Option<String>) {

@@ -34,14 +34,14 @@ pub enum MuuzikaError {
     #[error("Out of room codes")]
     OutOfRoomCodes,
 
-    #[error("Username {username} is already taken in room {room_code}")]
+    #[error("Username \"{username}\" is already taken in room {room_code}")]
     #[serde(rename_all = "camelCase")]
     UsernameTaken {
         room_code: RoomCode,
         username: Username,
     },
 
-    #[error("Player {username} is not in room {room_code}")]
+    #[error("Player \"{username}\" is not in room {room_code}")]
     #[serde(rename_all = "camelCase")]
     PlayerNotInRoom {
         room_code: RoomCode,

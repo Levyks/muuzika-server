@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use derive_more::{Display, FromStr};
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 
 use crate::errors::{MuuzikaError, MuuzikaResult};
-use crate::state::State;
 use crate::ws;
 use crate::ws::WsConnection;
 
@@ -18,22 +18,28 @@ impl RoomCode {
 }
 
 pub struct Room {
-    pub state: State,
     pub code: RoomCode,
     pub players: HashMap<Username, Player>,
     pub leader: Username,
+    pub cancel_cleanup: Option<oneshot::Sender<()>>,
+}
+
+impl Drop for Room {
+    fn drop(&mut self) {
+        log::debug!("Dropping room {}", self.code);
+    }
 }
 
 impl Room {
-    pub fn new(state: State, code: RoomCode, leader: Player) -> Self {
+    pub fn new(code: RoomCode, leader: Player) -> Self {
         let mut players = HashMap::new();
         let leader_username = leader.username.clone();
         players.insert(leader_username.clone(), leader);
         Self {
-            state,
             code,
             players,
             leader: leader_username,
+            cancel_cleanup: None,
         }
     }
 
@@ -131,6 +137,13 @@ pub struct Player {
     score: Score,
     pub ws: Option<WsConnection>,
     pub created_at: u64,
+    pub cancel_cleanup: Option<oneshot::Sender<()>>,
+}
+
+impl Drop for Player {
+    fn drop(&mut self) {
+        log::debug!("Dropping player {}", self.username);
+    }
 }
 
 impl Player {
@@ -140,6 +153,7 @@ impl Player {
             ws: None,
             score: 0,
             created_at: chrono::Utc::now().timestamp_millis() as u64,
+            cancel_cleanup: None,
         }
     }
 }
