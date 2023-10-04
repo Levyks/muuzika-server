@@ -1,40 +1,51 @@
 use std::convert::Infallible;
 
 use serde::de::DeserializeOwned;
+use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply};
 
-use crate::controller;
 use crate::errors::get_response_from_rejection;
+use crate::lobby;
 use crate::rooms::RoomCode;
 use crate::state::State;
-use crate::ws::handle_ws;
+use crate::ws::{handle_ws, WsQuery};
 
-fn ws_room(state: State) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path!("rooms" / RoomCode / "ws")
+fn ws(state: State) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("ws")
         .and(warp::ws())
-        .and(warp::header::<String>("Authorization"))
         .and(with_state(state))
+        .and(warp::query::<WsQuery>())
         .and_then(handle_ws)
 }
 
 fn create_room(state: State) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::path!("rooms")
         .and(warp::post())
-        .and(json_body::<controller::CreateOrJoinRoomRequest>())
         .and(with_state(state))
-        .and_then(controller::create_room)
+        .and(json_body::<lobby::CreateOrJoinRoomRequest>())
+        .and_then(|state, request| async move {
+            lobby::create_room(&state, &request)
+                .await
+                .map_err(warp::reject::custom)
+        })
+        .map(|response| warp::reply::with_status(warp::reply::json(&response), StatusCode::CREATED))
 }
 
 fn join_room(state: State) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::path!("rooms" / RoomCode)
         .and(warp::post())
-        .and(json_body::<controller::CreateOrJoinRoomRequest>())
         .and(with_state(state))
-        .and_then(controller::join_room)
+        .and(json_body::<lobby::CreateOrJoinRoomRequest>())
+        .and_then(|room_code, state, request| async move {
+            lobby::join_room(&state, &room_code, &request)
+                .await
+                .map_err(warp::reject::custom)
+        })
+        .map(|response| warp::reply::with_status(warp::reply::json(&response), StatusCode::CREATED))
 }
 
 pub fn filters(state: State) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    ws_room(state.clone())
+    ws(state.clone())
         .or(create_room(state.clone()))
         .or(join_room(state.clone()))
 }

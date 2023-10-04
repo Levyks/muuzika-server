@@ -4,7 +4,7 @@ use crate::errors::{ErrorResponse, MuuzikaResult};
 use crate::rooms::{RoomSyncDto, Username};
 use crate::state::WrappedRoom;
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 #[serde(tag = "type", content = "data")]
 pub enum ServerMessage {
     Sync(RoomSyncDto),
@@ -12,8 +12,10 @@ pub enum ServerMessage {
     PlayerLeft(Username),
     PlayerConnected(Username),
     PlayerDisconnected(Username),
+    Noop,
     Error(ErrorResponse),
     Result(u32),
+    AddResult { result: u32, username: Username },
 }
 
 #[derive(Deserialize, Debug)]
@@ -28,7 +30,7 @@ pub async fn handle_client_message(
     room: &WrappedRoom,
 ) -> ServerMessage {
     let result: MuuzikaResult<ServerMessage> = match message {
-        ClientMessage::Add(numbers) => handle_add(numbers).await,
+        ClientMessage::Add(numbers) => handle_add(numbers, username, room).await,
     };
 
     result
@@ -36,8 +38,17 @@ pub async fn handle_client_message(
         .unwrap_or_else(ServerMessage::Error)
 }
 
-pub async fn handle_add(numbers: Vec<u32>) -> MuuzikaResult<ServerMessage> {
+pub async fn handle_add(
+    numbers: Vec<u32>,
+    username: &Username,
+    room: &WrappedRoom,
+) -> MuuzikaResult<ServerMessage> {
     let result = numbers.iter().sum();
 
-    Ok(ServerMessage::Result(result))
+    room.read().await.send(ServerMessage::AddResult {
+        result,
+        username: username.clone(),
+    })?;
+
+    Ok(ServerMessage::Noop)
 }

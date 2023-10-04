@@ -7,11 +7,12 @@ use warp::Filter;
 use crate::filters::{filters, handle_rejection};
 use crate::state::State;
 
-mod controller;
+mod auth;
 mod errors;
 mod filters;
+#[macro_use]
 mod helpers;
-mod auth;
+mod lobby;
 mod messages;
 mod rooms;
 mod serialization;
@@ -30,5 +31,5 @@ async fn main() {
         .recover(handle_rejection)
         .with(warp::log("muuzika::http"));
 
-    warp::serve(server).run(([127, 0, 0, 1], 3030)).await;
+    warp::serve(server).run(([0, 0, 0, 0], 3030)).await;
 }

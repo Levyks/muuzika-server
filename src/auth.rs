@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 
-use crate::errors::{MuuzikaError, MuuzikaResult};
+use crate::errors::MuuzikaResult;
 use crate::rooms::{RoomCode, Username};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -11,18 +11,6 @@ pub struct JwtClaims {
     pub iat: u64,
     pub room_code: RoomCode,
     pub username: Username,
-}
-
-pub fn extract_token(header: &String) -> MuuzikaResult<String> {
-    const BEARER_PREFIX: &'static str = "Bearer ";
-
-    if header.starts_with(BEARER_PREFIX) {
-        Ok(header[BEARER_PREFIX.len()..].to_string())
-    } else {
-        Err(MuuzikaError::InvalidAuthorizationHeader {
-            expected_prefix: BEARER_PREFIX.to_string(),
-        })
-    }
 }
 
 pub fn encode_token(
@@ -58,9 +46,4 @@ pub fn decode_token(secret: &String, token: &String) -> MuuzikaResult<JwtClaims>
     )?;
 
     Ok(claims.claims)
-}
-
-pub fn decode_header(secret: &String, header: &String) -> MuuzikaResult<JwtClaims> {
-    let token = extract_token(header)?;
-    decode_token(secret, &token)
 }

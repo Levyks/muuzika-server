@@ -48,11 +48,11 @@ pub enum MuuzikaError {
         username: Username,
     },
 
-    #[error("Invalid authorization header")]
-    InvalidAuthorizationHeader { expected_prefix: String },
-
     #[error("Expired token")]
     ExpiredToken,
+
+    #[error("Token not sent")]
+    TokenNotSent,
 
     #[error("Connection was established in another device")]
     ConnectedInAnotherDevice,
@@ -67,8 +67,9 @@ impl MuuzikaError {
                 StatusCode::CONFLICT
             }
             MuuzikaError::PlayerNotInRoom { .. } => StatusCode::FORBIDDEN,
-            MuuzikaError::JwtError(_) | MuuzikaError::ExpiredToken => StatusCode::UNAUTHORIZED,
-            MuuzikaError::InvalidAuthorizationHeader { .. } => StatusCode::BAD_REQUEST,
+            MuuzikaError::JwtError(_) | MuuzikaError::ExpiredToken | MuuzikaError::TokenNotSent => {
+                StatusCode::UNAUTHORIZED
+            }
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -78,7 +79,7 @@ impl Reject for MuuzikaError {}
 
 pub type MuuzikaResult<T> = Result<T, MuuzikaError>;
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorResponse {
     #[serde(serialize_with = "serialize_status_code")]

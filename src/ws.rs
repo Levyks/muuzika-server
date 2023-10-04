@@ -3,6 +3,7 @@ use std::fmt;
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
 use nanoid::nanoid;
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
@@ -11,8 +12,9 @@ use warp::ws::{Message, WebSocket};
 use warp::{Rejection, Reply};
 
 use crate::errors::MuuzikaError;
+use crate::lobby;
 use crate::messages::{handle_client_message, ClientMessage, ServerMessage};
-use crate::rooms::{RoomCode, Username};
+use crate::rooms::Username;
 use crate::state::{State, WrappedRoom};
 
 const WS_LOG_TARGET: &'static str = "muuzika::ws";
@@ -35,56 +37,30 @@ fn split_and_spawn_flusher(ws: WebSocket) -> (WsConnection, SplitStream<WebSocke
     (conn, user_ws_rx)
 }
 
-pub async fn handle_ws(
-    room_code: RoomCode,
-    ws: warp::ws::Ws,
-    auth_header: String,
-    state: State,
-) -> Result<impl Reply, Rejection> {
-    Ok(ws.on_upgrade(move |socket| handle_ws_upgrade(socket, state, room_code, auth_header)))
+#[derive(Deserialize)]
+pub struct WsQuery {
+    pub token: String,
 }
 
-pub async fn handle_ws_upgrade(
-    ws: WebSocket,
+pub async fn handle_ws(
+    ws: warp::ws::Ws,
     state: State,
-    room_code: RoomCode,
-    auth_header: String,
-) {
-    const LOG_TARGET: &'static str = "muuzika::handle_ws_upgrade";
+    query: WsQuery,
+) -> Result<impl Reply, Rejection> {
+    Ok(ws.on_upgrade(move |socket| handle_ws_upgrade(socket, state, query.token)))
+}
 
+pub async fn handle_ws_upgrade(ws: WebSocket, state: State, token: String) {
     let (conn, mut rx) = split_and_spawn_flusher(ws);
 
-    log::debug!(target: LOG_TARGET, "{:?} | {:?} | Upgrading", conn, room_code);
-
-    let room = if let Some(r) = state.rooms.read().await.get(&room_code) {
-        r.clone()
-    } else {
-        log::debug!(target: LOG_TARGET, "{:?} | Room not found", conn);
-        serialize_and_send_and_close(
-            &conn,
-            ServerMessage::Error(
-                MuuzikaError::RoomNotFound {
-                    room_code: room_code.clone(),
-                }
-                .into(),
-            ),
-        );
-        return;
-    };
-
-    let username = match room
-        .write()
-        .await
-        .connect_player(&auth_header, conn.clone())
-    {
-        Ok(sync) => {
+    let (room, username) = match lobby::connect_player(&state, &token, &conn).await {
+        Ok((room, sync)) => {
             let username = sync.you.clone();
-            serialize_and_send(&conn, ServerMessage::Sync(sync), None);
-            username
+            conn.send(ServerMessage::Sync(sync), None);
+            (room, username)
         }
         Err(e) => {
-            log::debug!(target: LOG_TARGET, "{:?} | {:?} | Error connecting player: {:?}", conn, room_code, e);
-            serialize_and_send_and_close(&conn, ServerMessage::Error(e.into()));
+            conn.send_and_close(ServerMessage::Error(e.into()));
             return;
         }
     };
@@ -93,43 +69,23 @@ pub async fn handle_ws_upgrade(
         let message = match result {
             Ok(m) => m,
             Err(e) => {
-                log::debug!(target: WS_LOG_TARGET, "{:?} | {:?} | {:?} | Message error: {:?}", conn, room_code, username, e);
+                log::debug!(target: WS_LOG_TARGET, "{:?} | {:?} | Message error: {:?}", conn, username, e);
                 break;
             }
         };
-        handle_message(&conn, message, &username, &room_code, &room).await;
+        if let Ok(m) = message.to_str() {
+            handle_text_message(&conn, &room, &username, m).await;
+        }
     }
 
-    let _ = room.write().await.disconnect_player(&username, &conn);
+    let _ = lobby::disconnect_player(room, &username, &conn).await;
 }
 
-async fn handle_message(
-    conn: &WsConnection,
-    message: Message,
-    username: &Username,
-    room_code: &RoomCode,
-    room: &WrappedRoom,
-) {
-    let message = if let Ok(m) = message.to_str() {
-        m
-    } else {
-        return;
-    };
-
-    const LOG_TARGET: &'static str = "muuzika::handle_message";
-
-    log::trace!(target: LOG_TARGET, "{:?} | {:?} | {:?} | Received message: {}", conn, room_code, username, message);
-
+fn parse_message(message: &str) -> (serde_json::Result<ClientMessage>, Option<String>) {
     let value = match serde_json::from_str::<Value>(message) {
         Ok(v) => v,
         Err(e) => {
-            log::debug!(target: LOG_TARGET, "{:?} | {:?} | {:?} | Error parsing message: {:?}", conn, room_code, username, e);
-            serialize_and_send(
-                conn,
-                ServerMessage::Error(MuuzikaError::from(e).into()),
-                None,
-            );
-            return;
+            return (Err(e), None);
         }
     };
 
@@ -139,24 +95,33 @@ async fn handle_message(
         .flatten()
         .map(String::from);
 
-    let client_message = match serde_json::from_value::<ClientMessage>(value) {
-        Ok(m) => m,
-        Err(e) => {
-            log::debug!(target: LOG_TARGET, "{:?} | {:?} | {:?} | Error parsing message: {:?}", conn, room_code, username, e);
-            serialize_and_send(
-                conn,
-                ServerMessage::Error(MuuzikaError::from(e).into()),
-                ack,
-            );
+    (serde_json::from_value::<ClientMessage>(value), ack)
+}
+
+async fn handle_text_message(
+    conn: &WsConnection,
+    room: &WrappedRoom,
+    username: &Username,
+    message: &str,
+) {
+    const LOG_TARGET: &'static str = "muuzika::ws::handle_text_message";
+
+    log::trace!(target: LOG_TARGET, "{:?} | {:?} | Received message: {}", conn, username, message);
+
+    let (client_message, ack) = match parse_message(message) {
+        (Ok(m), ack) => (m, ack),
+        (Err(e), ack) => {
+            log::debug!(target: LOG_TARGET, "{:?} | {:?} | Error parsing message: {:?}", conn, username, e);
+            conn.send(ServerMessage::Error(MuuzikaError::from(e).into()), ack);
             return;
         }
     };
 
-    log::trace!(target: LOG_TARGET, "{:?} | {:?} | {:?} | Handling message: {:?}", conn, room_code, username, client_message);
+    log::trace!(target: LOG_TARGET, "{:?} | {:?} | Handling message: {:?}", conn, username, client_message);
     let result = handle_client_message(client_message, username, room).await;
-    log::trace!(target: LOG_TARGET, "{:?} | {:?} | {:?} | Answering with: {:?}, ack={:?}", conn, room_code, username, result, ack);
+    log::trace!(target: LOG_TARGET, "{:?} | {:?} | Answering with: {:?}, ack={:?}", conn, username, result, ack);
 
-    serialize_and_send(conn, result, ack);
+    conn.send(result, ack);
 }
 
 pub fn make_message<T>(message: T, ack: Option<String>) -> serde_json::Result<Message>
@@ -184,6 +149,37 @@ pub struct WsConnection {
     pub tx: UnboundedSender<Message>,
 }
 
+impl WsConnection {
+    pub fn close(&self) {
+        let _ = self.tx.send(Message::close());
+    }
+
+    pub fn send_raw(&self, message: Message) -> bool {
+        self.tx.send(message).is_ok()
+    }
+
+    pub fn send<T>(&self, message: T, ack: Option<String>) -> bool
+    where
+        T: serde::Serialize,
+    {
+        if let Ok(message) = make_message(message, ack) {
+            self.send_raw(message)
+        } else {
+            self.close();
+            false
+        }
+    }
+
+    pub fn send_and_close<T>(&self, message: T)
+    where
+        T: serde::Serialize,
+    {
+        if self.send(message, None) {
+            self.close();
+        }
+    }
+}
+
 impl fmt::Debug for WsConnection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("WsConnection").field(&self.id).finish()
@@ -193,39 +189,5 @@ impl fmt::Debug for WsConnection {
 impl PartialEq for WsConnection {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
-    }
-}
-
-fn close(conn: &WsConnection) {
-    let _ = conn.tx.send(Message::close());
-}
-
-pub fn send_or_close(conn: &WsConnection, message: Message) -> bool {
-    if let Ok(_) = conn.tx.send(message) {
-        true
-    } else {
-        close(conn);
-        false
-    }
-}
-
-pub fn serialize_and_send<T>(conn: &WsConnection, message: T, ack: Option<String>) -> bool
-where
-    T: serde::Serialize,
-{
-    if let Ok(message) = make_message(message, ack) {
-        send_or_close(conn, message)
-    } else {
-        close(conn);
-        false
-    }
-}
-
-pub fn serialize_and_send_and_close<T>(conn: &WsConnection, message: T)
-where
-    T: serde::Serialize,
-{
-    if serialize_and_send(conn, message, None) {
-        close(conn);
     }
 }

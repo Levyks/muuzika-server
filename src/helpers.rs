@@ -26,3 +26,20 @@ where
         Err(_) => panic!("Environment variable not found: {}", key),
     }
 }
+
+#[macro_export]
+macro_rules! log_identifier {
+    () => {
+        format!("{:05}", rand::random::<u16>())
+    };
+}
+
+#[macro_export]
+macro_rules! create_error_logger {
+    ($target:expr, $identifier:expr, $message:literal) => {
+        |e| {
+            log::debug!(target: $target, "{} | {}: {:?}", $identifier, $message, e);
+            e
+        }
+    };
+}
